@@ -3,41 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Torre de Controle - Sigasat</title>
+    <title>Torre de Controle - Minha Frota</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
         * { box-sizing: border-box; }
-        body { margin: 0; display: flex; height: 100vh; background: #f4f4f4; font-family: 'Segoe UI', sans-serif; }
+        body { margin: 0; display: flex; height: 100vh; background: #f4f4f4; font-family: 'Segoe UI', Tahoma, sans-serif; }
         
+        /* Barra Lateral */
         #sidebar { width: 320px; background: #1a1a1a; color: white; display: flex; flex-direction: column; z-index: 1000; box-shadow: 2px 0 10px rgba(0,0,0,0.5); }
         .header { padding: 20px; background: #111; border-bottom: 3px solid #1abc9c; text-align: center; }
-        .header h2 { margin: 0; font-size: 1.1rem; color: #1abc9c; letter-spacing: 1px; }
+        .header h2 { margin: 0; font-size: 1.1rem; color: #1abc9c; text-transform: uppercase; }
         
         #lista { flex-grow: 1; overflow-y: auto; padding: 10px; background: #222; }
         
+        /* Itens da Lista */
         .veiculo-card { 
             background: #333; padding: 15px; margin-bottom: 10px; border-radius: 6px; 
             border-left: 5px solid #1abc9c; cursor: pointer; transition: 0.3s; 
         }
         .veiculo-card:hover { background: #444; transform: translateX(5px); }
         .veiculo-card b { display: block; font-size: 1rem; color: #fff; }
-        .veiculo-card small { color: #aaa; }
+        .veiculo-card small { color: #aaa; display: block; margin-top: 4px; }
         .status-dot { color: #2ecc71; margin-right: 8px; font-size: 12px; }
 
+        /* Mapa */
         #map { flex-grow: 1; background: #ddd; }
         
-        .error-msg { color: #ff6b6b; padding: 15px; font-size: 0.9rem; line-height: 1.4; }
+        /* Mensagens de Erro */
+        .error-msg { color: #ff6b6b; padding: 15px; font-size: 0.9rem; line-height: 1.4; background: #2d1a1a; border-radius: 5px; margin: 10px; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
     <div class="header">
-        <h2>🚚 PAINEL DE MONITORAMENTO</h2>
+        <h2>🚚 Torre de Controle</h2>
     </div>
-    <div id="lista">Iniciando conexão...</div>
+    <div id="lista">Sincronizando com Sigasat...</div>
 </div>
 
 <div id="map"></div>
@@ -45,37 +49,47 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
-    // 1. Configuração Inicial do Mapa
+    // 1. Inicializa o mapa focado no Brasil
     const map = L.map('map').setView([-15.78, -47.92], 4);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
+        attribution: '© OpenStreetMap'
     }).addTo(map);
 
     let marcadores = {};
 
-    // 2. Função Principal de Busca de Dados
+    // 2. Função de Busca de Dados (Ajustada para evitar Erro 500)
     async function atualizarDados() {
         try {
+            // Criamos os parâmetros que o servidor da Sigasat espera no corpo do POST
+            const params = new URLSearchParams();
+            params.append('page', '1');
+            params.append('rows', '100');
+            params.append('sort', 'dsc_veiculo');
+            params.append('order', 'asc');
+
             const response = await fetch('https://srv.sigasat.com.br/dev/rast/index/grid.positions', {
                 method: 'POST',
                 headers: { 
-                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                     'X-Requested-With': 'XMLHttpRequest'
                 },
-                body: 'page=1&rows=100', // Puxa os primeiros 100 veículos
-                credentials: 'include'   // Usa seus cookies de login do Chrome
+                body: params,
+                credentials: 'include' // Usa os cookies do seu login ativo
             });
 
-            if (!response.ok) throw new Error('Acesso negado ou servidor fora do ar');
+            // Lemos a resposta primeiro como texto para evitar erro de JSON caso venha erro 500
+            const textoResposta = await response.text();
             
-            const dados = await response.json();
-            
-            // Verifica se o servidor retornou a lista de veículos
-            if (!dados || !dados.rows) {
+            let dados;
+            try {
+                dados = JSON.parse(textoResposta);
+            } catch (e) {
+                console.error("Servidor retornou erro ou página HTML em vez de dados:", textoResposta);
                 document.getElementById('lista').innerHTML = `
                     <div class="error-msg">
-                        <b>Sessão expirada!</b><br>
-                        Acesse o site da Sigasat em outra aba, faça login e depois atualize esta página.
+                        <b>Erro 500: Resposta Inválida</b><br>
+                        O servidor da Sigasat não entendeu o pedido. <br><br>
+                        <b>Solução:</b> Atualize a página do site oficial da Sigasat e depois volte aqui.
                     </div>`;
                 return;
             }
@@ -83,21 +97,26 @@
             const listaHtml = document.getElementById('lista');
             listaHtml.innerHTML = ''; 
 
+            if (!dados.rows || dados.rows.length === 0) {
+                listaHtml.innerHTML = '<div class="error-msg">Nenhum veículo encontrado na conta.</div>';
+                return;
+            }
+
             dados.rows.forEach(veiculo => {
-                // Mapeia coordenadas (tenta diferentes nomes de campos comuns na Sigasat)
-                const lat = parseFloat(veiculo.latitude || veiculo.lat_veiculo || veiculo.lat);
-                const lng = parseFloat(veiculo.longitude || veiculo.lng_veiculo || veiculo.lng);
-                const placa = veiculo.placa || veiculo.dsc_veiculo || 'ID: ' + veiculo.cd_veiculo;
-                const dsc = veiculo.dsc_veiculo || '';
+                // Tentativa de mapear campos comuns (latitude, lat_veiculo, etc)
+                const lat = parseFloat(veiculo.latitude || veiculo.lat_veiculo);
+                const lng = parseFloat(veiculo.longitude || veiculo.lng_veiculo);
+                const placa = veiculo.placa || veiculo.dsc_veiculo || "Sem Placa";
+                const dsc = veiculo.dsc_veiculo || "";
 
                 if (!isNaN(lat) && !isNaN(lng)) {
-                    // Atualiza marcador no mapa
+                    // Atualiza ou cria o marcador no mapa
                     if (marcadores[placa]) {
                         marcadores[placa].setLatLng([lat, lng]);
                     } else {
                         marcadores[placa] = L.marker([lat, lng])
                             .addTo(map)
-                            .bindPopup(`<b>Veículo:</b> ${placa}<br><b>Status:</b> Online`);
+                            .bindPopup(`<b>${placa}</b><br>${dsc}`);
                     }
 
                     // Adiciona na lista lateral
@@ -110,25 +129,24 @@
             });
 
         } catch (erro) {
-            console.error("Erro no Monitoramento:", erro);
+            console.error("Erro na requisição:", erro);
             document.getElementById('lista').innerHTML = `
                 <div class="error-msg">
                     <b>Erro de Conexão</b><br>
-                    1. Verifique a extensão <b>Allow CORS</b> (deve estar ON).<br>
-                    2. Mantenha o site da Sigasat logado em outra aba.
+                    Certifique-se que a extensão <b>Allow CORS</b> está ativa e verde.
                 </div>`;
         }
     }
 
-    // 3. Função para centralizar no caminhão ao clicar na lista
+    // 3. Centraliza o mapa ao clicar no veículo
     function focarVeiculo(lat, lng, placa) {
-        map.setView([lat, lng], 16); // Dá zoom no veículo
+        map.setView([lat, lng], 16);
         if (marcadores[placa]) {
             marcadores[placa].openPopup();
         }
     }
 
-    // Inicia a atualização e define intervalo (30 segundos)
+    // Inicia e agenda atualização (30 em 30 segundos)
     atualizarDados();
     setInterval(atualizarDados, 30000);
 
