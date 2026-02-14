@@ -3,38 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Torre de Controle - Minha Frota</title>
+    <title>Torre de Controle - Sigasat</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
         * { box-sizing: border-box; }
-        body { margin: 0; display: flex; height: 100vh; background: #f4f4f4; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { margin: 0; display: flex; height: 100vh; background: #f4f4f4; font-family: 'Segoe UI', sans-serif; }
         
-        /* Barra Lateral */
-        #sidebar { width: 320px; background: #222; color: white; display: flex; flex-direction: column; box-shadow: 2px 0 5px rgba(0,0,0,0.3); z-index: 1000; }
-        .header { padding: 20px; background: #1a1a1a; border-bottom: 2px solid #1abc9c; text-align: center; }
-        .header h2 { margin: 0; font-size: 1.2rem; color: #1abc9c; }
+        #sidebar { width: 320px; background: #1a1a1a; color: white; display: flex; flex-direction: column; z-index: 1000; box-shadow: 2px 0 10px rgba(0,0,0,0.5); }
+        .header { padding: 20px; background: #111; border-bottom: 3px solid #1abc9c; text-align: center; }
+        .header h2 { margin: 0; font-size: 1.1rem; color: #1abc9c; letter-spacing: 1px; }
         
-        #lista { flex-grow: 1; overflow-y: auto; padding: 10px; }
+        #lista { flex-grow: 1; overflow-y: auto; padding: 10px; background: #222; }
         
-        /* Estilo dos itens da lista */
-        .veiculo-card { background: #333; padding: 12px; margin-bottom: 8px; border-radius: 4px; border-left: 4px solid #1abc9c; cursor: pointer; transition: 0.2s; }
-        .veiculo-card:hover { background: #444; }
-        .veiculo-card b { display: block; font-size: 1rem; margin-bottom: 4px; }
-        .status-dot { color: #2ecc71; margin-right: 5px; }
+        .veiculo-card { 
+            background: #333; padding: 15px; margin-bottom: 10px; border-radius: 6px; 
+            border-left: 5px solid #1abc9c; cursor: pointer; transition: 0.3s; 
+        }
+        .veiculo-card:hover { background: #444; transform: translateX(5px); }
+        .veiculo-card b { display: block; font-size: 1rem; color: #fff; }
+        .veiculo-card small { color: #aaa; }
+        .status-dot { color: #2ecc71; margin-right: 8px; font-size: 12px; }
 
-        /* Mapa */
-        #map { flex-grow: 1; }
+        #map { flex-grow: 1; background: #ddd; }
+        
+        .error-msg { color: #ff6b6b; padding: 15px; font-size: 0.9rem; line-height: 1.4; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
     <div class="header">
-        <h2>🚚 MONITORAMENTO REAL-TIME</h2>
+        <h2>🚚 PAINEL DE MONITORAMENTO</h2>
     </div>
-    <div id="lista">Conectando à Sigasat...</div>
+    <div id="lista">Iniciando conexão...</div>
 </div>
 
 <div id="map"></div>
@@ -42,44 +45,59 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
-    // Inicializa o mapa focado no Brasil
+    // 1. Configuração Inicial do Mapa
     const map = L.map('map').setView([-15.78, -47.92], 4);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap'
+        attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
     let marcadores = {};
 
+    // 2. Função Principal de Busca de Dados
     async function atualizarDados() {
         try {
-            // Chamada para a API da Sigasat que você descobriu
             const response = await fetch('https://srv.sigasat.com.br/dev/rast/index/grid.positions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'page=1&rows=100' // Ajuste o 'rows' se tiver mais de 100 veículos
+                headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: 'page=1&rows=100', // Puxa os primeiros 100 veículos
+                credentials: 'include'   // Usa seus cookies de login do Chrome
             });
 
-            if (!response.ok) throw new Error('Falha na resposta do servidor');
+            if (!response.ok) throw new Error('Acesso negado ou servidor fora do ar');
             
             const dados = await response.json();
+            
+            // Verifica se o servidor retornou a lista de veículos
+            if (!dados || !dados.rows) {
+                document.getElementById('lista').innerHTML = `
+                    <div class="error-msg">
+                        <b>Sessão expirada!</b><br>
+                        Acesse o site da Sigasat em outra aba, faça login e depois atualize esta página.
+                    </div>`;
+                return;
+            }
+
             const listaHtml = document.getElementById('lista');
             listaHtml.innerHTML = ''; 
 
             dados.rows.forEach(veiculo => {
-                // Mapeando os dados (ajuste os nomes se necessário conforme o JSON da Sigasat)
-                const lat = parseFloat(veiculo.latitude);
-                const lng = parseFloat(veiculo.longitude);
-                const placa = veiculo.placa || 'Sem Placa';
+                // Mapeia coordenadas (tenta diferentes nomes de campos comuns na Sigasat)
+                const lat = parseFloat(veiculo.latitude || veiculo.lat_veiculo || veiculo.lat);
+                const lng = parseFloat(veiculo.longitude || veiculo.lng_veiculo || veiculo.lng);
+                const placa = veiculo.placa || veiculo.dsc_veiculo || 'ID: ' + veiculo.cd_veiculo;
                 const dsc = veiculo.dsc_veiculo || '';
 
                 if (!isNaN(lat) && !isNaN(lng)) {
-                    // Atualiza ou Cria marcador no mapa
+                    // Atualiza marcador no mapa
                     if (marcadores[placa]) {
                         marcadores[placa].setLatLng([lat, lng]);
                     } else {
                         marcadores[placa] = L.marker([lat, lng])
                             .addTo(map)
-                            .bindPopup(`<b>${placa}</b><br>${dsc}`);
+                            .bindPopup(`<b>Veículo:</b> ${placa}<br><b>Status:</b> Online`);
                     }
 
                     // Adiciona na lista lateral
@@ -92,23 +110,25 @@
             });
 
         } catch (erro) {
-            console.error("Erro detalhado:", erro);
+            console.error("Erro no Monitoramento:", erro);
             document.getElementById('lista').innerHTML = `
-                <div style="color: #ff6b6b; padding: 10px;">
-                    <b>Erro de Conexão:</b><br>
-                    1. Verifique se está logado no site da Sigasat.<br>
-                    2. Certifique-se que a extensão <b>Allow CORS</b> está ATIVA.
+                <div class="error-msg">
+                    <b>Erro de Conexão</b><br>
+                    1. Verifique a extensão <b>Allow CORS</b> (deve estar ON).<br>
+                    2. Mantenha o site da Sigasat logado em outra aba.
                 </div>`;
         }
     }
 
-    // Função para clicar na lista e o mapa ir até o caminhão
+    // 3. Função para centralizar no caminhão ao clicar na lista
     function focarVeiculo(lat, lng, placa) {
-        map.setView([lat, lng], 15);
-        marcadores[placa].openPopup();
+        map.setView([lat, lng], 16); // Dá zoom no veículo
+        if (marcadores[placa]) {
+            marcadores[placa].openPopup();
+        }
     }
 
-    // Executa agora e depois a cada 30 segundos
+    // Inicia a atualização e define intervalo (30 segundos)
     atualizarDados();
     setInterval(atualizarDados, 30000);
 
